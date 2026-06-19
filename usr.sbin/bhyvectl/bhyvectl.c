@@ -76,6 +76,7 @@ static int vm_suspend_opt;
 #endif
 
 static int get_all;
+static int ping_val;
 
 enum {
 	VMNAME = OPT_START,	/* avoid collision with return values from getopt */
@@ -87,6 +88,7 @@ enum {
 	SET_CHECKPOINT_FILE,
 	SET_SUSPEND_FILE,
 #endif
+	PING,
 	OPT_LAST,
 };
 
@@ -112,6 +114,7 @@ print_cpus(const char *banner, const cpuset_t *cpus)
 	printf("\n");
 }
 
+
 static struct option *
 setup_options(void)
 {
@@ -135,6 +138,7 @@ setup_options(void)
 		{ "get-debug-cpus",	NO_ARG,	&get_debug_cpus,	1 },
 		{ "get-suspended-cpus", NO_ARG,	&get_suspended_cpus, 	1 },
 		{ "get-cpu-topology",	NO_ARG, &get_cpu_topology,	1 },
+		{ "ping",		NO_ARG,		&ping_val,		1 },
 #ifdef BHYVE_SNAPSHOT
 		{ "checkpoint", 	REQ_ARG, 0,	SET_CHECKPOINT_FILE},
 		{ "suspend", 		REQ_ARG, 0,	SET_SUSPEND_FILE},
@@ -143,6 +147,7 @@ setup_options(void)
 
 	return (bhyvectl_opts(common_opts, nitems(common_opts)));
 }
+
 
 void
 usage(const struct option *opts)
@@ -171,6 +176,7 @@ usage(const struct option *opts)
 	}
 	exit(1);
 }
+
 
 static int
 show_memmap(struct vmctx *ctx)
@@ -223,6 +229,7 @@ show_memmap(struct vmctx *ctx)
 	}
 }
 
+
 static int
 show_memseg(struct vmctx *ctx)
 {
@@ -249,6 +256,7 @@ show_memseg(struct vmctx *ctx)
 		segid++;
 	}
 }
+
 
 #ifdef BHYVE_SNAPSHOT
 static int
@@ -288,6 +296,7 @@ done:
 	return (err);
 }
 
+
 static int
 open_directory(const char *file)
 {
@@ -303,6 +312,7 @@ open_directory(const char *file)
 
 	return (fd);
 }
+
 
 static int
 snapshot_request(const char *vmname, char *file, bool suspend)
@@ -321,7 +331,72 @@ snapshot_request(const char *vmname, char *file, bool suspend)
 
 	return (send_message(vmname, nvl));
 }
+
 #endif
+
+static nvlist_t *
+send_message_r(const char *vmname, nvlist_t *nvl)
+{
+	struct sockaddr_un addr;
+	nvlist_t *reply;
+	int socket_fd;
+
+	reply = NULL;
+
+	socket_fd = socket(PF_UNIX, SOCK_STREAM, 0);
+	if (socket_fd < 0) {
+		perror("Error creating bhyvectl socket");
+		goto done;
+	}
+
+	memset(&addr, 0, sizeof(struct sockaddr_un));
+	snprintf(addr.sun_path, sizeof(addr.sun_path), "%s%s",
+	    BHYVE_RUN_DIR, vmname);
+	addr.sun_family = AF_UNIX;
+	addr.sun_len = SUN_LEN(&addr);
+
+	if (connect(socket_fd, (struct sockaddr *)&addr, addr.sun_len) != 0) {
+		perror("connect() failed");
+		goto done;
+	}
+
+	if (nvlist_send(socket_fd, nvl) < 0) {
+		perror("nvlist_send() failed");
+		goto done;
+	}
+
+	reply = nvlist_recv(socket_fd, 0);
+	if (reply == NULL)
+		perror("nvlist_recv() failed");
+
+done:
+	if (socket_fd >= 0)
+		close(socket_fd);
+	return (reply);
+}
+
+static void
+ping_vm(const char *vmname)
+{
+	nvlist_t *nvl, *reply;
+
+	nvl = nvlist_create(0);
+	nvlist_add_string(nvl, "cmd", "ping");
+
+	reply = send_message_r(vmname, nvl);
+	nvlist_destroy(nvl);
+
+	if (reply != NULL) {
+		if (nvlist_exists_bool(reply, "pong"))
+			printf("pong: %s\n",
+			    nvlist_get_bool(reply, "pong") ? "true" : "false");
+		else if (nvlist_exists_string(reply, "error"))
+			printf("error: %s\n", nvlist_get_string(reply, "error"));
+		nvlist_destroy(reply);
+	} else {
+		printf("no reply from vm %s\n", vmname);
+	}
+}
 
 int
 main(int argc, char *argv[])
@@ -389,6 +464,11 @@ main(int argc, char *argv[])
 
 	if (vmname == NULL)
 		usage(opts);
+
+	if (ping_val) {
+		ping_vm(vmname);
+		return (0);
+	}
 
 	action_opts = create + destroy + force_reset + force_poweroff;
 #ifdef BHYVE_SNAPSHOT
@@ -540,3 +620,4 @@ main(int argc, char *argv[])
 	free(opts);
 	exit(error);
 }
+

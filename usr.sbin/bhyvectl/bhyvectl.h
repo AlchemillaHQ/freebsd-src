@@ -31,6 +31,8 @@
 
 #include <stdbool.h>
 
+#define BHYVE_RUN_DIR "/var/run/bhyve/"
+
 #define	OPT_START	1000
 #define	OPT_START_MD	2000
 

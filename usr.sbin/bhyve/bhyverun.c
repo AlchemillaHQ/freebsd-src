@@ -84,6 +84,7 @@
 #ifdef BHYVE_GDB
 #include "gdb.h"
 #endif
+#include "ipc.h"
 #include "mem.h"
 #include "mevent.h"
 #include "pci_emul.h"
@@ -1058,13 +1059,11 @@ main(int argc, char *argv[])
 	 */
 	setproctitle("%s", vmname);
 
-#ifdef BHYVE_SNAPSHOT
 	/*
-	 * checkpointing thread for communication with bhyvectl
+	 * Thread for handling bhyvectl commands.
 	 */
-	if (init_checkpoint_thread(ctx) != 0)
+	if (init_ipc_thread(ctx) != 0)
 		errx(EX_OSERR, "Failed to start checkpoint thread");
-#endif
 
 #ifndef WITHOUT_CAPSICUM
 	caph_cache_catpages();
