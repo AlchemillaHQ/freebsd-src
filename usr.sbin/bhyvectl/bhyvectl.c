@@ -76,7 +76,7 @@ static int vm_suspend_opt;
 #endif
 
 static int get_all;
-static int ping_val;
+static int balloon_val = -1;
 
 enum {
 	VMNAME = OPT_START,	/* avoid collision with return values from getopt */
@@ -88,7 +88,7 @@ enum {
 	SET_CHECKPOINT_FILE,
 	SET_SUSPEND_FILE,
 #endif
-	PING,
+	BALLOON,
 	OPT_LAST,
 };
 
@@ -138,7 +138,7 @@ setup_options(void)
 		{ "get-debug-cpus",	NO_ARG,	&get_debug_cpus,	1 },
 		{ "get-suspended-cpus", NO_ARG,	&get_suspended_cpus, 	1 },
 		{ "get-cpu-topology",	NO_ARG, &get_cpu_topology,	1 },
-		{ "ping",		NO_ARG,		&ping_val,		1 },
+		{ "balloon",		REQ_ARG,	0,		BALLOON },
 #ifdef BHYVE_SNAPSHOT
 		{ "checkpoint", 	REQ_ARG, 0,	SET_CHECKPOINT_FILE},
 		{ "suspend", 		REQ_ARG, 0,	SET_SUSPEND_FILE},
@@ -376,22 +376,25 @@ done:
 }
 
 static void
-ping_vm(const char *vmname)
+balloon_vm(const char *vmname, uint64_t num_pages)
 {
 	nvlist_t *nvl, *reply;
 
 	nvl = nvlist_create(0);
-	nvlist_add_string(nvl, "cmd", "ping");
+	nvlist_add_string(nvl, "cmd", "balloon");
+	nvlist_add_number(nvl, "num_pages", num_pages);
 
 	reply = send_message_r(vmname, nvl);
 	nvlist_destroy(nvl);
 
 	if (reply != NULL) {
-		if (nvlist_exists_bool(reply, "pong"))
-			printf("pong: %s\n",
-			    nvlist_get_bool(reply, "pong") ? "true" : "false");
-		else if (nvlist_exists_string(reply, "error"))
+		if (nvlist_exists_number(reply, "num_pages")) {
+			printf("balloon: desired=%lu, actual=%lu\n",
+			    (unsigned long)nvlist_get_number(reply, "num_pages"),
+			    (unsigned long)nvlist_get_number(reply, "actual"));
+		} else if (nvlist_exists_string(reply, "error")) {
 			printf("error: %s\n", nvlist_get_string(reply, "error"));
+		}
 		nvlist_destroy(reply);
 	} else {
 		printf("no reply from vm %s\n", vmname);
@@ -438,6 +441,9 @@ main(int argc, char *argv[])
 			memsize = atoi(optarg) * MB;
 			memsize = roundup(memsize, 2 * MB);
 			break;
+		case BALLOON:
+			balloon_val = atoi(optarg);
+			break;
 		case SET_CAP:
 			capval = strtoul(optarg, NULL, 0);
 			setcap = 1;
@@ -465,8 +471,8 @@ main(int argc, char *argv[])
 	if (vmname == NULL)
 		usage(opts);
 
-	if (ping_val) {
-		ping_vm(vmname);
+	if (balloon_val >= 0) {
+		balloon_vm(vmname, (uint64_t)balloon_val);
 		return (0);
 	}
 

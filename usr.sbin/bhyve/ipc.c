@@ -187,13 +187,3 @@ fail:
 	return (err);
 }
 
-static nvlist_t *
-vm_do_ping(struct vmctx *ctx __unused, const nvlist_t *nvl __unused)
-{
-    nvlist_t *reply;
-
-    reply = nvlist_create(0);
-    nvlist_add_bool(reply, "pong", true);
-    return (reply);
-}
-IPC_COMMAND(ping, vm_do_ping);
