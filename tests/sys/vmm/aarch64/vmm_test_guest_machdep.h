@@ -26,4 +26,17 @@
  */
 void	vmm_guest_trap(struct trapframe *, uint64_t);	/* called by vectors */
 
+/* Flush the TLB entries for a page whose mapping the host changed. */
+static __inline void
+vmm_guest_flush_tlb(uint64_t gva)
+{
+
+	__asm __volatile(
+	    "dsb ishst\n\t"
+	    "tlbi vaae1is, %0\n\t"
+	    "dsb ish\n\t"
+	    "isb"
+	    : : "r" ((gva >> 12) & ((1UL << 44) - 1)) : "memory");
+}
+
 #endif /* !_VMM_TEST_GUEST_MACHDEP_H_ */

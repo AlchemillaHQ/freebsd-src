@@ -94,6 +94,89 @@ vmm_test_alloc_pages(struct vmm_test_vm *vm, size_t npages)
 }
 
 static void
+vmm_test_check_range(uint64_t gva, size_t len)
+{
+
+	if ((gva & PAGE_MASK) != 0 || (len & PAGE_MASK) != 0 || len == 0)
+		vmm_test_fail("%#jx+%#zx is not a range of whole pages",
+		    (uintmax_t)gva, len);
+}
+
+static void
+vmm_test_check_flags(int flags)
+{
+
+	if ((flags & ~(VMM_TEST_PROT_ALL | VMM_TEST_MAP_DEVICE)) != 0 ||
+	    ((flags & VMM_TEST_PROT_ALL) != 0 &&
+	    (flags & VMM_TEST_PROT_READ) == 0))
+		vmm_test_fail("unsupported mapping flags %#x", flags);
+}
+
+void
+vmm_test_map(struct vmm_test_vm *vm, uint64_t gva, vm_paddr_t gpa,
+    size_t len, int flags)
+{
+	size_t off;
+
+	vmm_test_check_range(gva, len);
+	vmm_test_check_flags(flags);
+	if ((gpa & PAGE_MASK) != 0 || (flags & VMM_TEST_PROT_READ) == 0)
+		vmm_test_fail("cannot map %#jx to %#jx with flags %#x",
+		    (uintmax_t)gva, (uintmax_t)gpa, flags);
+	for (off = 0; off < len; off += PAGE_SIZE)
+		vmm_test_md_map(vm, gva + off, gpa + off, flags);
+}
+
+void
+vmm_test_unmap(struct vmm_test_vm *vm, uint64_t gva, size_t len)
+{
+	size_t off;
+
+	vmm_test_check_range(gva, len);
+	for (off = 0; off < len; off += PAGE_SIZE)
+		vmm_test_md_unmap(vm, gva + off);
+}
+
+void
+vmm_test_protect(struct vmm_test_vm *vm, uint64_t gva, size_t len, int flags)
+{
+	size_t off;
+
+	vmm_test_check_range(gva, len);
+	vmm_test_check_flags(flags);
+	for (off = 0; off < len; off += PAGE_SIZE)
+		vmm_test_md_protect(vm, gva + off, flags);
+}
+
+bool
+vmm_test_gva2gpa(struct vmm_test_vm *vm, uint64_t gva, vm_paddr_t *gpap)
+{
+
+	return (vmm_test_md_gva2gpa(vm, gva, gpap));
+}
+
+void *
+vmm_test_gva2hva(struct vmm_test_vm *vm, uint64_t gva, size_t len)
+{
+	vm_paddr_t first, gpa;
+	uint64_t va;
+
+	if (len == 0 || !vmm_test_md_gva2gpa(vm, gva, &first))
+		vmm_test_fail("guest address %#jx is not mapped",
+		    (uintmax_t)gva);
+	for (va = trunc_page(gva) + PAGE_SIZE; va < gva + len;
+	    va += PAGE_SIZE) {
+		if (!vmm_test_md_gva2gpa(vm, va, &gpa))
+			vmm_test_fail("guest address %#jx is not mapped",
+			    (uintmax_t)va);
+		if (gpa != first + (va - gva))
+			vmm_test_fail("guest range %#jx+%#zx is not physically "
+			    "contiguous", (uintmax_t)gva, len);
+	}
+	return (vmm_test_gpa2hva(vm, first, len));
+}
+
+static void
 vmm_test_read_gva(struct vmm_test_vm *vm, uint64_t gva, void *buf, size_t len)
 {
 	vm_paddr_t gpa;
@@ -161,7 +244,7 @@ vmm_test_load_image(struct dl_phdr_info *info, size_t size __unused,
 		memcpy(hva, (const void *)start, end - start);
 		__builtin___clear_cache(hva, hva + (end - start));
 		for (va = start; va < end; va += PAGE_SIZE, gpa += PAGE_SIZE)
-			vmm_test_md_map_page(vm, va, gpa);
+			vmm_test_md_map(vm, va, gpa, VMM_TEST_PROT_ALL);
 	}
 	return (1);
 }

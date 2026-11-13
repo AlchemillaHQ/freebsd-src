@@ -24,4 +24,12 @@
  */
 void	vmm_guest_trap(struct trapframe *);	/* called by the IDT stubs */
 
+/* Flush the TLB entry for a page whose mapping the host changed. */
+static __inline void
+vmm_guest_flush_tlb(uint64_t gva)
+{
+
+	invlpg(gva);
+}
+
 #endif /* !_VMM_TEST_GUEST_MACHDEP_H_ */

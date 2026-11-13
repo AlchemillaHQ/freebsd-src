@@ -52,7 +52,9 @@
  * Guest code runs on its own copy of the test binary, so:
  *
  *  - it may call other functions in the test binary and read its globals,
- *    but a global changed on one side is not seen by the other;
+ *    but a global changed on one side is not seen by the other.  The host
+ *    reaches the guest's copy of a global with VMM_TEST_GUEST_VAR(), while
+ *    the vCPU is stopped;
  *  - it must not call into shared libraries (libc included), use
  *    thread-local storage, or touch memory the host allocated at run time.
  *    The harness provides memset() and memcpy(), which the compiler may call
@@ -96,6 +98,15 @@
  * above it, and the harness maps nothing there.
  */
 #define	VMM_TEST_UNMAPPED_VA	0x1000UL
+
+/*
+ * Guest-virtual addresses that tests may map: VMM_TEST_VA_SIZE bytes from
+ * VMM_TEST_VA.  The test binary is loaded at a few megabytes, or with
+ * address space layout randomization above the data size limit (1 GB on
+ * arm64, 32 GB on amd64), and the harness maps nothing there.
+ */
+#define	VMM_TEST_VA		0x10000000UL
+#define	VMM_TEST_VA_SIZE	0x10000000UL
 
 /*
  * Ucall ABI shared between guest and host.  The guest fills in a struct
@@ -183,17 +194,76 @@ extern void (*vmm_test_fail_hook)(const char *);
 uint64_t vmm_test_get_reg(struct vmm_test_vcpu *, int);
 void	vmm_test_set_reg(struct vmm_test_vcpu *, int, uint64_t);
 
-/* Allocate zeroed guest-physical pages, and access guest memory. */
+/*
+ * Guest memory.  Pages come from a simple allocator over the VM's memory and
+ * are zeroed.  Guest-virtual mappings use the harness's own page tables, and
+ * cover whole pages.
+ */
 vm_paddr_t vmm_test_alloc_pages(struct vmm_test_vm *, size_t);
 void	*vmm_test_gpa2hva(struct vmm_test_vm *, vm_paddr_t, size_t);
 
 /*
- * Implemented by the machine-dependent code.  vmm_test_md_map_page() maps a
- * page for reading, writing and execution in the harness's page tables.
+ * Mapping flags.  A mapping without VMM_TEST_PROT_READ is not present; one
+ * with VMM_TEST_PROT_WRITE or VMM_TEST_PROT_EXEC must also be readable.
+ * VMM_TEST_MAP_DEVICE selects uncached device memory: Device-nGnRnE on arm64,
+ * UC on amd64.  On arm64 the guest's accesses to such memory bypass the
+ * caches, so data the host writes there must first be cleaned to the point
+ * of coherency.
+ */
+#define	VMM_TEST_PROT_READ	0x01
+#define	VMM_TEST_PROT_WRITE	0x02
+#define	VMM_TEST_PROT_EXEC	0x04
+#define	VMM_TEST_PROT_ALL	\
+	(VMM_TEST_PROT_READ | VMM_TEST_PROT_WRITE | VMM_TEST_PROT_EXEC)
+#define	VMM_TEST_MAP_DEVICE	0x08
+
+/*
+ * Map, unmap or change the protection of the pages in [gva, gva + len).
+ * Mapping fails if a page is already mapped, unmapping if one is not.
+ * vmm_test_protect() keeps each page's guest-physical address and memory
+ * type, so protecting a page without VMM_TEST_PROT_READ and then with it
+ * restores the mapping.  It cannot change VMM_TEST_MAP_DEVICE, so the flags
+ * for a device page always include it, and VMM_TEST_MAP_DEVICE alone makes
+ * the page inaccessible.  To change the memory type, unmap the page, have
+ * the guest flush it, and map it again.
+ *
+ * The host cannot flush the guest's TLB.  After any change to a page that
+ * the guest may have accessed, other than mapping it, the guest must flush
+ * it with vmm_guest_flush_tlb() before relying on the change.  Raising the
+ * protection of a present page needs the flush too: until then, the guest
+ * may still fault on it.
+ */
+void	vmm_test_map(struct vmm_test_vm *, uint64_t, vm_paddr_t, size_t, int);
+void	vmm_test_unmap(struct vmm_test_vm *, uint64_t, size_t);
+void	vmm_test_protect(struct vmm_test_vm *, uint64_t, size_t, int);
+
+/*
+ * Translate a guest-virtual address.  vmm_test_gva2hva() fails unless the
+ * whole range is mapped to contiguous guest-physical memory.
+ */
+bool	vmm_test_gva2gpa(struct vmm_test_vm *, uint64_t, vm_paddr_t *);
+void	*vmm_test_gva2hva(struct vmm_test_vm *, uint64_t, size_t);
+
+/*
+ * The guest's copy of a global variable in the test binary, for the host to
+ * read or write while the vCPU is stopped.
+ */
+#define	VMM_TEST_GUEST_VAR(vm, var)					\
+	((__typeof__(&(var)))vmm_test_gva2hva((vm), (uintptr_t)&(var),	\
+	    sizeof(var)))
+
+/*
+ * Implemented by the machine-dependent code.  vmm_test_md_pte() returns the
+ * last-level entry mapping a page, or NULL if a table on the way is missing
+ * or the page is part of a larger mapping; tests may use it for bits the
+ * mapping flags do not cover.
  */
 void	vmm_test_md_vm_init(struct vmm_test_vm *);
 void	vmm_test_md_vcpu_init(struct vmm_test_vcpu *, vmm_test_guest_fn_t *);
-void	vmm_test_md_map_page(struct vmm_test_vm *, uint64_t, vm_paddr_t);
+void	vmm_test_md_map(struct vmm_test_vm *, uint64_t, vm_paddr_t, int);
+void	vmm_test_md_unmap(struct vmm_test_vm *, uint64_t);
+void	vmm_test_md_protect(struct vmm_test_vm *, uint64_t, int);
+uint64_t *vmm_test_md_pte(struct vmm_test_vm *, uint64_t);
 bool	vmm_test_md_gva2gpa(struct vmm_test_vm *, uint64_t, vm_paddr_t *);
 bool	vmm_test_md_exit_reenter(const struct vm_exit *);
 bool	vmm_test_md_exit_ucall(struct vmm_test_vcpu *, uint64_t *);

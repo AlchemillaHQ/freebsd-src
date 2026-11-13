@@ -23,6 +23,7 @@ ${PACKAGE}FILES+=	utils.subr
 .PATH:		${.CURDIR}/${MACHINE_CPUARCH}
 
 ATF_TESTS_C+=	harness_test
+ATF_TESTS_C+=	harness_mem_test
 
 # Every program links the harness, whose objects bsd.progs.mk builds once.
 .for t in ${ATF_TESTS_C}

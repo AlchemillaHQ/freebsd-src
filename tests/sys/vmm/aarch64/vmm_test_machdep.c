@@ -79,10 +79,12 @@ static const char *const vector_types[] = {
 
 /*
  * Return an entry in the four-level, 48-bit stage-1 tables: level 3 for a
- * 4KB page, 2 for a 2MB block.  Allocate missing tables.
+ * 4KB page, 2 for a 2MB block.  With 'alloc', allocate missing tables;
+ * otherwise return NULL if one is missing.  Also return NULL, or fail with
+ * 'alloc', if a block maps 'gva' above 'level'.
  */
 static uint64_t *
-vmm_test_pte(struct vmm_test_vm *vm, uint64_t gva, int level)
+vmm_test_pte(struct vmm_test_vm *vm, uint64_t gva, int level, bool alloc)
 {
 	uint64_t *table, *pte;
 	vm_paddr_t pa;
@@ -98,33 +100,93 @@ vmm_test_pte(struct vmm_test_vm *vm, uint64_t gva, int level)
 		    (lvl == 0 ? L0_ADDR_MASK : Ln_ADDR_MASK)];
 		if (lvl == level)
 			return (pte);
-		if ((*pte & ATTR_DESCR_VALID) == 0)
+		if ((*pte & ATTR_DESCR_VALID) == 0) {
+			if (!alloc)
+				return (NULL);
 			*pte = vmm_test_alloc_pages(vm, 1) | L0_TABLE;
-		if ((*pte & ATTR_DESCR_MASK) != L0_TABLE)
+		}
+		if ((*pte & ATTR_DESCR_MASK) != L0_TABLE) {
+			if (!alloc)
+				return (NULL);
 			vmm_test_fail("%#jx is already mapped by a block",
 			    (uintmax_t)gva);
+		}
 		pa = *pte & ATTR_ADDR;
 	}
 }
 
-/* Map normal, write-back memory: a 4KB page at level 3, a block at 2. */
-static void
-vmm_test_map(struct vmm_test_vm *vm, uint64_t gva, vm_paddr_t gpa, int level)
+/*
+ * Descriptor bits for vmm_test_map() flags.  An inaccessible page keeps its
+ * address in an invalid descriptor, so that it can be made accessible again.
+ */
+static uint64_t
+vmm_test_pte_bits(int flags)
+{
+	uint64_t bits;
+
+	bits = ATTR_AF | ATTR_SH(ATTR_SH_IS) |
+	    ATTR_S1_IDX((flags & VMM_TEST_MAP_DEVICE) != 0 ? 1 : 0) |
+	    ATTR_S1_AP((flags & VMM_TEST_PROT_WRITE) != 0 ?
+	    ATTR_S1_AP_RW : ATTR_S1_AP_RO);
+	if ((flags & VMM_TEST_PROT_EXEC) == 0)
+		bits |= ATTR_S1_XN;
+	if ((flags & VMM_TEST_PROT_READ) != 0)
+		bits |= L3_PAGE;
+	else
+		bits |= L3_PAGE & ~ATTR_DESCR_VALID;
+	return (bits);
+}
+
+/* Return the 4KB page entry for 'gva', which must already have one. */
+static uint64_t *
+vmm_test_mapped_pte(struct vmm_test_vm *vm, uint64_t gva)
 {
 	uint64_t *pte;
 
-	pte = vmm_test_pte(vm, gva, level);
-	if ((*pte & ATTR_DESCR_VALID) != 0)
-		vmm_test_fail("%#jx is already mapped", (uintmax_t)gva);
-	*pte = gpa | ATTR_AF | ATTR_SH(ATTR_SH_IS) | ATTR_S1_IDX(0) |
-	    (level == 3 ? L3_PAGE : L2_BLOCK);
+	pte = vmm_test_pte(vm, gva, 3, false);
+	if (pte == NULL || *pte == 0)
+		vmm_test_fail("%#jx is not mapped", (uintmax_t)gva);
+	return (pte);
 }
 
 void
-vmm_test_md_map_page(struct vmm_test_vm *vm, uint64_t gva, vm_paddr_t gpa)
+vmm_test_md_map(struct vmm_test_vm *vm, uint64_t gva, vm_paddr_t gpa,
+    int flags)
+{
+	uint64_t *pte;
+
+	pte = vmm_test_pte(vm, gva, 3, true);
+	if (*pte != 0)
+		vmm_test_fail("%#jx is already mapped", (uintmax_t)gva);
+	*pte = gpa | vmm_test_pte_bits(flags);
+}
+
+void
+vmm_test_md_unmap(struct vmm_test_vm *vm, uint64_t gva)
 {
 
-	vmm_test_map(vm, gva, gpa, 3);
+	*vmm_test_mapped_pte(vm, gva) = 0;
+}
+
+void
+vmm_test_md_protect(struct vmm_test_vm *vm, uint64_t gva, int flags)
+{
+	uint64_t bits, *pte;
+
+	pte = vmm_test_mapped_pte(vm, gva);
+	bits = vmm_test_pte_bits(flags);
+	/* Arm requires break-before-make to change the memory type. */
+	if ((*pte & ATTR_S1_IDX_MASK) != (bits & ATTR_S1_IDX_MASK))
+		vmm_test_fail("cannot change the memory type of %#jx",
+		    (uintmax_t)gva);
+	*pte = (*pte & ATTR_ADDR) | bits;
+}
+
+uint64_t *
+vmm_test_md_pte(struct vmm_test_vm *vm, uint64_t gva)
+{
+
+	return (vmm_test_pte(vm, gva, 3, false));
 }
 
 /* Ucalls use the page tables installed by the harness. */
@@ -158,6 +220,7 @@ vmm_test_md_gva2gpa(struct vmm_test_vm *vm, uint64_t gva, vm_paddr_t *gpap)
 void
 vmm_test_md_vm_init(struct vmm_test_vm *vm)
 {
+	uint64_t *pde;
 	char *hva;
 	vm_paddr_t gpa;
 	size_t len;
@@ -165,12 +228,15 @@ vmm_test_md_vm_init(struct vmm_test_vm *vm)
 	vm->md.ttbr0 = vmm_test_alloc_pages(vm, 1);
 	vm->md.ttbr1 = vmm_test_alloc_pages(vm, 1);
 	for (gpa = vm->mem_base;
-	    gpa < vm->mem_base + VMM_TEST_MEMSIZE; gpa += L2_SIZE)
-		vmm_test_map(vm, VMM_TEST_PHYS_TO_DMAP(gpa), gpa, 2);
+	    gpa < vm->mem_base + VMM_TEST_MEMSIZE; gpa += L2_SIZE) {
+		pde = vmm_test_pte(vm, VMM_TEST_PHYS_TO_DMAP(gpa), 2, true);
+		*pde = gpa | ATTR_AF | ATTR_SH(ATTR_SH_IS) | ATTR_S1_IDX(0) |
+		    L2_BLOCK;
+	}
 
 	/* The bootstrap must remain executable across enabling the MMU. */
 	vm->md.boot = vmm_test_alloc_pages(vm, 1);
-	vmm_test_md_map_page(vm, vm->md.boot, vm->md.boot);
+	vmm_test_md_map(vm, vm->md.boot, vm->md.boot, VMM_TEST_PROT_ALL);
 	len = vmm_guest_boot_end - vmm_guest_boot;
 	if (len > PAGE_SIZE)
 		vmm_test_fail("the bootstrap does not fit in a page");

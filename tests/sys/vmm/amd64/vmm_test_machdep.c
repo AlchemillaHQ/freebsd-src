@@ -116,10 +116,12 @@ static const char *const suspend_names[] = {
 
 /*
  * Return the page table entry for 'gva' at 'level' (1 for a 4KB page, 2 for a
- * 2MB page), allocating intermediate page table pages as needed.
+ * 2MB page).  With 'alloc', allocate missing page table pages; otherwise
+ * return NULL if one is missing.  Also return NULL, or fail with 'alloc', if
+ * a large page maps 'gva' above 'level'.
  */
 static uint64_t *
-vmm_test_pte(struct vmm_test_vm *vm, uint64_t gva, int level)
+vmm_test_pte(struct vmm_test_vm *vm, uint64_t gva, int level, bool alloc)
 {
 	uint64_t *table, *pte;
 	vm_paddr_t pa;
@@ -132,36 +134,106 @@ vmm_test_pte(struct vmm_test_vm *vm, uint64_t gva, int level)
 		    (NPTES - 1)];
 		if (lvl == level)
 			return (pte);
-		if ((*pte & X86_PG_V) == 0)
+		if ((*pte & X86_PG_V) == 0) {
+			if (!alloc)
+				return (NULL);
 			*pte = vmm_test_alloc_pages(vm, 1) | X86_PG_V |
 			    X86_PG_RW;
-		if ((*pte & X86_PG_PS) != 0)
+		}
+		if ((*pte & X86_PG_PS) != 0) {
+			if (!alloc)
+				return (NULL);
 			vmm_test_fail("%#jx is already mapped by a large page",
 			    (uintmax_t)gva);
+		}
 		pa = *pte & PG_FRAME;
 	}
 }
 
-static void
-vmm_test_map(struct vmm_test_vm *vm, uint64_t gva, vm_paddr_t gpa, int level)
+/*
+ * A software bit in every leaf entry the harness makes, so that a page
+ * protected without read access, which is not present, still counts as
+ * mapped, even at guest-physical address 0.
+ */
+#define	PTE_MAPPED	X86_PG_AVAIL1
+#define	PTE_CACHE	(X86_PG_NC_PCD | X86_PG_NC_PWT)
+
+/*
+ * Leaf entry bits for vmm_test_map() flags.  An inaccessible page keeps its
+ * memory type, so that it can be made accessible again.
+ */
+static uint64_t
+vmm_test_pte_bits(int flags)
+{
+	uint64_t bits;
+
+	bits = PTE_MAPPED;
+	if ((flags & VMM_TEST_MAP_DEVICE) != 0)
+		bits |= PTE_CACHE;
+	if ((flags & VMM_TEST_PROT_READ) == 0)
+		return (bits);
+	bits |= X86_PG_V;
+	if ((flags & VMM_TEST_PROT_WRITE) != 0)
+		bits |= X86_PG_RW;
+	if ((flags & VMM_TEST_PROT_EXEC) == 0)
+		bits |= X86_PG_NX;
+	return (bits);
+}
+
+/* Return the 4KB page entry for 'gva', which must already have one. */
+static uint64_t *
+vmm_test_mapped_pte(struct vmm_test_vm *vm, uint64_t gva)
 {
 	uint64_t *pte;
 
-	pte = vmm_test_pte(vm, gva, level);
-	if ((*pte & X86_PG_V) != 0)
-		vmm_test_fail("%#jx is already mapped", (uintmax_t)gva);
-	*pte = gpa | X86_PG_V | X86_PG_RW | (level > 1 ? X86_PG_PS : 0);
+	pte = vmm_test_pte(vm, gva, 1, false);
+	if (pte == NULL || (*pte & PTE_MAPPED) == 0)
+		vmm_test_fail("%#jx is not mapped", (uintmax_t)gva);
+	return (pte);
 }
 
 void
-vmm_test_md_map_page(struct vmm_test_vm *vm, uint64_t gva, vm_paddr_t gpa)
+vmm_test_md_map(struct vmm_test_vm *vm, uint64_t gva, vm_paddr_t gpa,
+    int flags)
 {
+	uint64_t *pte;
 
 	/* The guest uses 4-level paging. */
 	if (gva >= (1UL << 47))
 		vmm_test_fail("%#jx is not a lower-half 48-bit address",
 		    (uintmax_t)gva);
-	vmm_test_map(vm, gva, gpa, 1);
+	pte = vmm_test_pte(vm, gva, 1, true);
+	if (*pte != 0)
+		vmm_test_fail("%#jx is already mapped", (uintmax_t)gva);
+	*pte = gpa | vmm_test_pte_bits(flags);
+}
+
+void
+vmm_test_md_unmap(struct vmm_test_vm *vm, uint64_t gva)
+{
+
+	*vmm_test_mapped_pte(vm, gva) = 0;
+}
+
+void
+vmm_test_md_protect(struct vmm_test_vm *vm, uint64_t gva, int flags)
+{
+	uint64_t bits, *pte;
+
+	pte = vmm_test_mapped_pte(vm, gva);
+	bits = vmm_test_pte_bits(flags);
+	/* As on arm64, where changing it needs break-before-make. */
+	if ((*pte & PTE_CACHE) != (bits & PTE_CACHE))
+		vmm_test_fail("cannot change the memory type of %#jx",
+		    (uintmax_t)gva);
+	*pte = (*pte & PG_FRAME) | bits;
+}
+
+uint64_t *
+vmm_test_md_pte(struct vmm_test_vm *vm, uint64_t gva)
+{
+
+	return (vmm_test_pte(vm, gva, 1, false));
 }
 
 /*
@@ -218,11 +290,14 @@ vmm_test_idt_init(struct vmm_test_vm *vm)
 void
 vmm_test_md_vm_init(struct vmm_test_vm *vm)
 {
+	uint64_t *pde;
 	vm_paddr_t gpa;
 
 	vm->md.pml4 = vmm_test_alloc_pages(vm, 1);
-	for (gpa = 0; gpa < VMM_TEST_MEMSIZE; gpa += NBPDR)
-		vmm_test_map(vm, VMM_TEST_PHYS_TO_DMAP(gpa), gpa, 2);
+	for (gpa = 0; gpa < VMM_TEST_MEMSIZE; gpa += NBPDR) {
+		pde = vmm_test_pte(vm, VMM_TEST_PHYS_TO_DMAP(gpa), 2, true);
+		*pde = gpa | X86_PG_V | X86_PG_RW | X86_PG_PS;
+	}
 	vmm_test_idt_init(vm);
 }
 
@@ -264,7 +339,8 @@ vmm_test_set_regs(struct vmm_test_vcpu *vcpu, uint64_t rip, uint64_t rsp,
 		vcpu->vm->md.pml4,
 		/* Compilers use SSE freely, so enable it. */
 		CR4_PAE | CR4_FXSR | CR4_XMM,
-		EFER_LME | EFER_LMA,
+		/* NXE lets mappings be non-executable. */
+		EFER_LME | EFER_LMA | EFER_NXE,
 		PSL_KERNEL,	/* interrupts disabled */
 		GSEL(GDT_CODE, SEL_KPL),
 		GSEL(GDT_DATA, SEL_KPL),
