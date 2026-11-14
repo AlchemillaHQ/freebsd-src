@@ -53,12 +53,15 @@
 #include <netinet/tcp.h>
 
 #include <dev/clk/clk.h>
+#include <dev/fdt/simplebus.h>
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
 #include <dev/syscon/syscon.h>
 
 #include <arm64/mediatek/if_mtkethreg.h>
 
+#include "mdio_if.h"
+#include "ofw_bus_if.h"
 #include "syscon_if.h"
 
 #define	MTKETH_NMACS		2
@@ -133,6 +136,8 @@ struct mtketh_softc {
 	struct resource		*irq_res[2];	/* fe1 (TX), fe2 (RX) */
 	void			*irq_cookie[2];
 	struct mtx		mtx;
+	struct mtx		mdio_mtx;
+	phandle_t		mdio_node;
 	struct callout		tick;
 	struct syscon		*ethsys;
 	struct mtketh_mac	*mac[MTKETH_NMACS];
@@ -190,6 +195,43 @@ static int	mtketh_tx_reclaim(struct mtketh_softc *);
 
 /* ------------------------------------------------------------- MDIO */
 
+static int
+mtketh_mdio_wait(struct mtketh_softc *sc)
+{
+	int i;
+
+	for (i = 0; i < 10000; i++) {
+		if ((RD4(sc, MAC_PIAC) & PIAC_ACCESS) == 0)
+			return (0);
+		DELAY(1);
+	}
+	return (ETIMEDOUT);
+}
+
+static int
+mtketh_mdio_read(struct mtketh_softc *sc, int phy, int reg)
+{
+	if (mtketh_mdio_wait(sc) != 0)
+		return (-1);
+	WR4(sc, MAC_PIAC, PIAC_ACCESS | PIAC_START_C22 | PIAC_CMD_READ |
+	    ((phy & 0x1f) << PIAC_ADDR_SHIFT) |
+	    ((reg & 0x1f) << PIAC_REG_SHIFT));
+	if (mtketh_mdio_wait(sc) != 0)
+		return (-1);
+	return (RD4(sc, MAC_PIAC) & PIAC_DATA_MASK);
+}
+
+static int
+mtketh_mdio_write(struct mtketh_softc *sc, int phy, int reg, int val)
+{
+	if (mtketh_mdio_wait(sc) != 0)
+		return (ETIMEDOUT);
+	WR4(sc, MAC_PIAC, PIAC_ACCESS | PIAC_START_C22 | PIAC_CMD_WRITE |
+	    ((phy & 0x1f) << PIAC_ADDR_SHIFT) |
+	    ((reg & 0x1f) << PIAC_REG_SHIFT) | (val & PIAC_DATA_MASK));
+	return (mtketh_mdio_wait(sc));
+}
+
 static void
 mtketh_mdio_init(struct mtketh_softc *sc, phandle_t node)
 {
@@ -198,13 +240,49 @@ mtketh_mdio_init(struct mtketh_softc *sc, phandle_t node)
 
 	freq = 2500000;
 	mdio = ofw_bus_find_child(node, "mdio-bus");
-	if (mdio > 0)
+	if (mdio > 0) {
+		sc->mdio_node = mdio;
 		OF_getencprop(mdio, "clock-frequency", &freq, sizeof(freq));
+	}
 	if (freq == 0)
 		freq = 2500000;
 	div = MIN(howmany(25000000, freq), 63);
 	MD4(sc, MAC_PPSC, PPSC_MDC_CFG_MASK,
 	    PPSC_MDC_TURBO | (div << PPSC_MDC_CFG_SHIFT));
+}
+
+/* MDIO bus interface, for the "mdio-bus" child. */
+static int
+mtketh_mdio_readreg(device_t dev, int phy, int reg)
+{
+	struct mtketh_softc *sc = device_get_softc(dev);
+	int val;
+
+	mtx_lock(&sc->mdio_mtx);
+	val = mtketh_mdio_read(sc, phy, reg);
+	mtx_unlock(&sc->mdio_mtx);
+	return (val);
+}
+
+static int
+mtketh_mdio_writereg(device_t dev, int phy, int reg, int val)
+{
+	struct mtketh_softc *sc = device_get_softc(dev);
+	int error;
+
+	mtx_lock(&sc->mdio_mtx);
+	error = mtketh_mdio_write(sc, phy, reg, val);
+	mtx_unlock(&sc->mdio_mtx);
+	return (error);
+}
+
+static phandle_t
+mtketh_ofw_get_node(device_t bus, device_t child)
+{
+	struct mtketh_softc *sc = device_get_softc(bus);
+
+	/* The only child is the MDIO bus. */
+	return (sc->mdio_node);
 }
 
 /* -------------------------------------------------------------- DMA */
@@ -1457,6 +1535,7 @@ mtketh_attach(device_t dev)
 	sc->dev = dev;
 	node = ofw_bus_get_node(dev);
 	mtx_init(&sc->mtx, device_get_nameunit(dev), NULL, MTX_DEF);
+	mtx_init(&sc->mdio_mtx, "mtketh mdio", NULL, MTX_DEF);
 	callout_init_mtx(&sc->tick, &sc->mtx, 0);
 
 	rid = 0;
@@ -1566,6 +1645,12 @@ mtketh_attach(device_t dev)
 		device_printf(dev, "GMAC%d: %d Mbit/s fixed link%s\n", i,
 		    mac->speed, mac->pause ? ", pause" : "");
 	}
+
+	/* The switch or PHYs on the MDIO bus. */
+	if (sc->mdio_node > 0) {
+		device_add_child(dev, "mtkmdio", DEVICE_UNIT_ANY);
+		bus_attach_children(dev);
+	}
 	return (0);
 }
 
@@ -1592,6 +1677,11 @@ static device_method_t mtketh_methods[] = {
 	DEVMETHOD(device_probe,		mtketh_probe),
 	DEVMETHOD(device_attach,	mtketh_attach),
 	DEVMETHOD(device_shutdown,	mtketh_shutdown),
+
+	DEVMETHOD(mdio_readreg,		mtketh_mdio_readreg),
+	DEVMETHOD(mdio_writereg,	mtketh_mdio_writereg),
+
+	DEVMETHOD(ofw_bus_get_node,	mtketh_ofw_get_node),
 	DEVMETHOD_END
 };
 
@@ -1603,3 +1693,58 @@ static driver_t mtketh_driver = {
 
 DRIVER_MODULE(mtketh, simplebus, mtketh_driver, NULL, NULL);
 MODULE_DEPEND(mtketh, ether, 1, 1, 1);
+
+/*
+ * The "mdio-bus" child: a bus for the devices on the MDIO lines of the
+ * frame engine, found by their device tree nodes.
+ */
+static int
+mtkmdio_probe(device_t dev)
+{
+	device_set_desc(dev, "MediaTek MT7986 MDIO bus");
+	return (BUS_PROBE_DEFAULT);
+}
+
+static int
+mtkmdio_attach(device_t dev)
+{
+	phandle_t node, child;
+
+	node = ofw_bus_get_node(dev);
+	simplebus_init(dev, node);
+	for (child = OF_child(node); child > 0; child = OF_peer(child)) {
+		if (!OF_hasprop(child, "reg") ||
+		    !ofw_bus_node_status_okay(child))
+			continue;
+		simplebus_add_device(dev, child, 0, NULL, DEVICE_UNIT_ANY,
+		    NULL);
+	}
+	bus_attach_children(dev);
+	return (0);
+}
+
+static int
+mtkmdio_readreg(device_t dev, int phy, int reg)
+{
+	return (MDIO_READREG(device_get_parent(dev), phy, reg));
+}
+
+static int
+mtkmdio_writereg(device_t dev, int phy, int reg, int val)
+{
+	return (MDIO_WRITEREG(device_get_parent(dev), phy, reg, val));
+}
+
+static device_method_t mtkmdio_methods[] = {
+	DEVMETHOD(device_probe,		mtkmdio_probe),
+	DEVMETHOD(device_attach,	mtkmdio_attach),
+
+	DEVMETHOD(mdio_readreg,		mtkmdio_readreg),
+	DEVMETHOD(mdio_writereg,	mtkmdio_writereg),
+	DEVMETHOD_END
+};
+
+DEFINE_CLASS_1(mtkmdio, mtkmdio_driver, mtkmdio_methods,
+    sizeof(struct simplebus_softc), simplebus_driver);
+
+DRIVER_MODULE(mtkmdio, mtketh, mtkmdio_driver, NULL, NULL);
