@@ -25,6 +25,7 @@ ${PACKAGE}FILES+=	utils.subr
 ATF_TESTS_C+=	harness_test
 ATF_TESTS_C+=	harness_exception_test
 ATF_TESTS_C+=	harness_mem_test
+ATF_TESTS_C+=	mem_access_test
 
 # Every program links the harness, whose objects bsd.progs.mk builds once.
 .for t in ${ATF_TESTS_C}
