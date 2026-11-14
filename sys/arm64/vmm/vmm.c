@@ -913,7 +913,8 @@ vm_handle_paging(struct vcpu *vcpu, bool *retu)
 	struct vm_map *map;
 	uint64_t addr, esr;
 	pmap_t pmap;
-	int ftype, rv;
+	int dfsc, ec, ftype, rv;
+	bool perm;
 
 	vme = &vcpu->exitinfo;
 
@@ -925,14 +926,37 @@ vm_handle_paging(struct vcpu *vcpu, bool *retu)
 	if (pmap_fault(pmap, esr, addr) == KERN_SUCCESS)
 		return (0);
 
-	switch (ESR_ELx_EXCEPTION(esr)) {
+	ec = ESR_ELx_EXCEPTION(esr);
+	switch (ec) {
 	case EXCP_INSN_ABORT_L:
 	case EXCP_DATA_ABORT_L:
-		ftype = VM_PROT_EXECUTE | VM_PROT_READ | VM_PROT_WRITE;
 		break;
 	default:
 		panic("%s: Invalid exception (esr = %lx)", __func__, esr);
 	}
+
+	/*
+	 * Ask only for the access that faulted, and let vm_fault() check it
+	 * against the mapping.  The syndrome does not say whether a fault on
+	 * the stage 1 table walk, or on cache maintenance, needed write
+	 * access: the walk may be updating the access flag, and DC IVAC may
+	 * need write access where DC CVAC needs only read.  For those, a
+	 * permission fault means that read access was not enough.
+	 * Instruction and data aborts encode S1PTW and the fault status
+	 * alike.
+	 */
+	dfsc = esr & ISS_DATA_DFSC_MASK;
+	perm = dfsc == ISS_DATA_DFSC_PF_L1 || dfsc == ISS_DATA_DFSC_PF_L2 ||
+	    dfsc == ISS_DATA_DFSC_PF_L3;
+	if ((esr & ISS_DATA_S1PTW) != 0 ||
+	    (ec == EXCP_DATA_ABORT_L && (esr & ISS_DATA_CM) != 0))
+		ftype = perm ? VM_PROT_WRITE : VM_PROT_READ;
+	else if (ec == EXCP_INSN_ABORT_L)
+		ftype = VM_PROT_EXECUTE;
+	else if ((esr & ISS_DATA_WnR) != 0)
+		ftype = VM_PROT_WRITE;
+	else
+		ftype = VM_PROT_READ;
 
 	map = &vm_vmspace(vm)->vm_map;
 	rv = vm_fault(map, vme->u.paging.gpa, ftype, VM_FAULT_NORMAL, NULL);
