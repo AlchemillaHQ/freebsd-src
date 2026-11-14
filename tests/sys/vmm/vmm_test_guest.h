@@ -53,4 +53,40 @@ void	vmm_guest_halt(void) __dead2;
 	}								\
 } while (0)
 
+/*
+ * Exception handlers, installed for the whole VM.  Vectors are numbered as
+ * described in vmm_test_guest_machdep.h.  A handler runs on the interrupted
+ * code's stack with interrupts disabled, and may change the frame, for
+ * example to resume after the faulting instruction; the registers and the
+ * program counter are restored from the frame when it returns, except the
+ * stack pointer on arm64.
+ */
+typedef void vmm_guest_handler_t(struct trapframe *, int);
+
+void	vmm_guest_set_handler(int, vmm_guest_handler_t *);
+
+/*
+ * Capture exceptions with the given vector: record the frame in
+ * vmm_guest_captured, stop with a CAPTURE ucall, and when the host runs the
+ * vCPU again, return with the recorded frame, which the host may have
+ * changed.  Before returning, the guest flushes the TLB entry for a faulting
+ * address, so the host may fix a mapping and let the instruction retry.  See
+ * vmm_test_run_expect_exception().
+ */
+struct vmm_guest_capture {
+	struct trapframe frame;
+	uint64_t	vector;
+	uint64_t	count;		/* exceptions captured so far */
+};
+
+extern struct vmm_guest_capture vmm_guest_captured;
+
+void	vmm_guest_capture_exception(int);
+
+/* Called by the machine-dependent trap code; true if a handler ran. */
+bool	vmm_guest_dispatch(struct trapframe *, int);
+
+/* Machine-dependent: prepare to return from a captured exception. */
+void	vmm_guest_md_capture_return(struct trapframe *, int);
+
 #endif /* !_VMM_TEST_GUEST_H_ */

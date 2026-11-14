@@ -121,6 +121,7 @@ enum vmm_ucall_cmd {
 	UCALL_DONE,
 	UCALL_ABORT,		/* args[0], args[1]: values, if args[2] != 0 */
 	UCALL_EXCEPTION,	/* args: machine-dependent */
+	UCALL_CAPTURE,		/* args[0]: vector, args[1]: count */
 };
 
 struct vmm_ucall {
@@ -179,6 +180,15 @@ void	vmm_test_run_until_done(struct vmm_test_vcpu *);
 /* Run the vCPU and fail unless its next exit has the given exit code. */
 struct vm_exit *vmm_test_run_expect_exit(struct vmm_test_vcpu *,
 	    enum vm_exitcode);
+
+/*
+ * Run the vCPU and fail unless the guest captures an exception with the
+ * given vector (see vmm_guest_capture_exception()).  Return the guest's copy
+ * of the exception frame, which the host may change before running the vCPU
+ * again; the guest then returns from the exception with it.  Only one vCPU
+ * may have a captured exception pending at a time.
+ */
+struct trapframe *vmm_test_run_expect_exception(struct vmm_test_vcpu *, int);
 
 void	vmm_test_fail_exit(struct vmm_test_vcpu *, const char *) __dead2;
 
@@ -268,6 +278,7 @@ bool	vmm_test_md_gva2gpa(struct vmm_test_vm *, uint64_t, vm_paddr_t *);
 bool	vmm_test_md_exit_reenter(const struct vm_exit *);
 bool	vmm_test_md_exit_ucall(struct vmm_test_vcpu *, uint64_t *);
 const char *vmm_test_md_exitcode_name(int);
+void	vmm_test_md_vector_name(int, char *, size_t);
 void	vmm_test_md_describe_exit(const struct vm_exit *, char *, size_t);
 void	vmm_test_md_describe_exception(const struct vmm_ucall *, char *,
 	    size_t);

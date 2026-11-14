@@ -22,6 +22,7 @@
 #include <vmmapi.h>
 
 #include "vmm_test.h"
+#include "vmm_test_guest.h"
 
 #define	STACK_PAGES	4
 
@@ -419,6 +420,22 @@ vmm_test_md_describe_exception(const struct vmm_ucall *uc, char *buf,
 	if (vector / 4 != 1)
 		(void)snprintf(buf, len, " from %s",
 		    vector_origins[vector / 4]);
+}
+
+void
+vmm_test_md_vector_name(int vector, char *buf, size_t len)
+{
+	static const char *const others[] = { "IRQ", "FIQ", "SError" };
+
+	if (vector >= 0 && vector < (int)nitems(exception_names) &&
+	    exception_names[vector] != NULL)
+		(void)snprintf(buf, len, "%s", exception_names[vector]);
+	else if (vector >= VMM_GUEST_EXC_IRQ &&
+	    vector <= VMM_GUEST_EXC_SERROR)
+		(void)snprintf(buf, len, "%s", others[vector -
+		    VMM_GUEST_EXC_IRQ]);
+	else
+		(void)snprintf(buf, len, "EC %#x", vector);
 }
 
 const char *

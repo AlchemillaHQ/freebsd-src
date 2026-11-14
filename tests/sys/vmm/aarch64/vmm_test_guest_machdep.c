@@ -43,13 +43,50 @@ memcpy(void * __restrict dst, const void * __restrict src, size_t len)
 _Static_assert(sizeof(struct trapframe) == 288,
     "vmm_test_exception.S does not match struct trapframe");
 
+/* 'index' is the VBAR_EL1 entry: its offset divided by 0x80. */
 void
-vmm_guest_trap(struct trapframe *tf, uint64_t vector)
+vmm_guest_trap(struct trapframe *tf, uint64_t index)
 {
+	int vector;
 
-	_GUEST_UCALL(.cmd = UCALL_EXCEPTION, .args = { vector, tf->tf_esr,
+	if (index / 4 == 1) {
+		switch (index % 4) {
+		case 0:
+			vector = ESR_ELx_EXCEPTION(tf->tf_esr);
+			/* A fault on the instruction in GUEST_ASM_SAFE(). */
+			if (tf->tf_x[9] == VMM_GUEST_SAFE_MAGIC &&
+			    tf->tf_elr == tf->tf_x[10]) {
+				tf->tf_x[9] = vector;
+				tf->tf_x[10] = tf->tf_esr;
+				tf->tf_elr = tf->tf_x[11];
+				return;
+			}
+			break;
+		case 1:
+			vector = VMM_GUEST_EXC_IRQ;
+			break;
+		case 2:
+			vector = VMM_GUEST_EXC_FIQ;
+			break;
+		default:
+			vector = VMM_GUEST_EXC_SERROR;
+			break;
+		}
+		if (vmm_guest_dispatch(tf, vector))
+			return;
+	}
+	_GUEST_UCALL(.cmd = UCALL_EXCEPTION, .args = { index, tf->tf_esr,
 	    tf->tf_elr, tf->tf_far });
 	vmm_guest_halt();
+}
+
+/* Let the instruction see a mapping the host fixed. */
+void
+vmm_guest_md_capture_return(struct trapframe *tf, int vector)
+{
+
+	if (vector == EXCP_DATA_ABORT || vector == EXCP_INSN_ABORT)
+		vmm_guest_flush_tlb(tf->tf_far);
 }
 
 void

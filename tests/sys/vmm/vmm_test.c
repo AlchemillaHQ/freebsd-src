@@ -21,6 +21,7 @@
 #include <atf-c.h>
 
 #include "vmm_test.h"
+#include "vmm_test_guest.h"
 
 /* Leave the first megabyte of guest memory unused. */
 #define	VMM_TEST_ALLOC_OFFSET	(1024 * 1024)
@@ -31,6 +32,7 @@ static const char *const ucall_names[] = {
 	[UCALL_DONE] = "DONE",
 	[UCALL_ABORT] = "ABORT",
 	[UCALL_EXCEPTION] = "EXCEPTION",
+	[UCALL_CAPTURE] = "CAPTURE",
 };
 
 /* The test binary's loadable segments, as mapped in this process. */
@@ -490,4 +492,26 @@ vmm_test_run_expect_exit(struct vmm_test_vcpu *vcpu, enum vm_exitcode exitcode)
 		vmm_test_fail_exit(vcpu, why);
 	}
 	return (&vcpu->exit);
+}
+
+struct trapframe *
+vmm_test_run_expect_exception(struct vmm_test_vcpu *vcpu, int vector)
+{
+	struct vmm_guest_capture *captured;
+	char why[64], expected[32], got[32];
+
+	vmm_test_md_vector_name(vector, expected, sizeof(expected));
+	(void)vmm_test_vcpu_run(vcpu);
+	if (vcpu->ucall.cmd != UCALL_CAPTURE) {
+		(void)snprintf(why, sizeof(why), "expected captured %s",
+		    expected);
+		vmm_test_fail_exit(vcpu, why);
+	}
+	if (vcpu->ucall.args[0] != (uint64_t)vector) {
+		vmm_test_md_vector_name(vcpu->ucall.args[0], got, sizeof(got));
+		vmm_test_fail("vCPU %d: expected captured %s, captured %s",
+		    vcpu->id, expected, got);
+	}
+	captured = VMM_TEST_GUEST_VAR(vcpu->vm, vmm_guest_captured);
+	return (&captured->frame);
 }
