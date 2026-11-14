@@ -855,6 +855,7 @@ dev/clk/mediatek/mt7986_infracfg.c		optional fdt soc_mediatek_mt7986
 dev/clk/mediatek/mt7986_topckgen.c		optional fdt soc_mediatek_mt7986
 arm64/mediatek/mt7986_pinctrl.c		optional fdt mt7986_pinctrl soc_mediatek_mt7986
 arm64/mediatek/mt7986_wdt.c		optional mt7986_wdt fdt soc_mediatek_mt7986
+arm64/mediatek/mt7986_msdc.c		optional mt7986_msdc mmc fdt soc_mediatek_mt7986
 
 # RockChip Clock support
 dev/clk/rockchip/rk_cru.c			optional fdt soc_rockchip

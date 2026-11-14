@@ -14,6 +14,8 @@ device		uart_ns8250		# ns8250-type UART driver
 
 # Watchdog and peripheral resets
 device		mt7986_wdt
+# SD/MMC host controller
+device		mt7986_msdc
 
 options 	FDT
 
