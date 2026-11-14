@@ -13,6 +13,7 @@ options 	FDT
 
 # Ethernet
 device		mtketh
+device		mt7531sw		# MT7531 switch on the MDIO bus
 
 # DTBs
 makeoptions	MODULES_EXTRA+="dtb/mediatek"
