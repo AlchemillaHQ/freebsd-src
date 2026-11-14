@@ -46,8 +46,11 @@ struct mtk_clk_mux_def {
 /*
  * Gate with write-1-to-set/clear registers and a status register.  Normally
  * a set bit means the clock is gated; MTK_GATE_INVERTED reverses this.
+ * With MTK_GATE_NO_SETCLR the gate is a bit in a single register, changed
+ * by read-modify-write of sta_reg; set_reg and clr_reg are unused.
  */
 #define	MTK_GATE_INVERTED	0x0001
+#define	MTK_GATE_NO_SETCLR	0x0002
 
 struct mtk_clk_gate_def {
 	struct clknode_init_def	clkdef;

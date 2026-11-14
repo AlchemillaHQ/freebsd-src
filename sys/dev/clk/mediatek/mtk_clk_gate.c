@@ -6,7 +6,8 @@
 
 /*
  * MediaTek clock gate with write-1-to-set and write-1-to-clear registers
- * and a status register.  A set status bit normally means "gated".
+ * and a status register, or (MTK_GATE_NO_SETCLR) a bit in one register.
+ * A set status bit normally means "gated".
  */
 
 #include <sys/param.h>
@@ -24,12 +25,15 @@ struct mtk_clk_gate_sc {
 	uint32_t	sta_reg;
 	uint32_t	mask;
 	bool		inverted;
+	bool		no_setclr;
 };
 
 #define	RD4(_clk, _off, _val)						\
 	CLKDEV_READ_4(clknode_get_device(_clk), _off, _val)
 #define	WR4(_clk, _off, _val)						\
 	CLKDEV_WRITE_4(clknode_get_device(_clk), _off, _val)
+#define	MD4(_clk, _off, _clr, _set)					\
+	CLKDEV_MODIFY_4(clknode_get_device(_clk), _off, _clr, _set)
 #define	DEVICE_LOCK(_clk)						\
 	CLKDEV_DEVICE_LOCK(clknode_get_device(_clk))
 #define	DEVICE_UNLOCK(_clk)						\
@@ -49,7 +53,10 @@ mtk_clk_gate_set_gate(struct clknode *clk, bool enable)
 
 	DEVICE_LOCK(clk);
 	/* Writing the set register sets the status bit. */
-	if (enable != sc->inverted)
+	if (sc->no_setclr)
+		MD4(clk, sc->sta_reg, enable != sc->inverted ? sc->mask : 0,
+		    enable != sc->inverted ? 0 : sc->mask);
+	else if (enable != sc->inverted)
 		WR4(clk, sc->clr_reg, sc->mask);
 	else
 		WR4(clk, sc->set_reg, sc->mask);
@@ -98,6 +105,7 @@ mtk_clk_gate_register(struct clkdom *clkdom,
 	sc->sta_reg = def->sta_reg;
 	sc->mask = 1u << def->bit;
 	sc->inverted = (def->flags & MTK_GATE_INVERTED) != 0;
+	sc->no_setclr = (def->flags & MTK_GATE_NO_SETCLR) != 0;
 
 	if (clknode_register(clkdom, clk) == NULL)
 		return (ENXIO);
