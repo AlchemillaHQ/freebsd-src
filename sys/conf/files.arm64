@@ -854,6 +854,7 @@ dev/clk/mediatek/mt7986_apmixedsys.c		optional fdt soc_mediatek_mt7986
 dev/clk/mediatek/mt7986_ethsys.c		optional fdt soc_mediatek_mt7986 syscon
 dev/clk/mediatek/mt7986_infracfg.c		optional fdt soc_mediatek_mt7986
 dev/clk/mediatek/mt7986_topckgen.c		optional fdt soc_mediatek_mt7986
+arm64/mediatek/if_mtketh.c		optional mtketh fdt soc_mediatek_mt7986 syscon
 
 # RockChip Clock support
 dev/clk/rockchip/rk_cru.c			optional fdt soc_rockchip
