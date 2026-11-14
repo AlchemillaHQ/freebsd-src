@@ -700,7 +700,7 @@ static void
 vmm_hyp_handle_guest_exit(struct hypctx *hypctx, uint64_t *ret)
 {
 	bool hpfar_valid;
-	uint64_t s1e1r, hpfar_el2, host_esr_el2, host_far_el2;
+	uint64_t s1e1r, hpfar_el2, host_esr_el2, host_far_el2, vttbr;
 
 	hpfar_valid = true;
 	host_esr_el2 = hypctx_read_sys_reg(hypctx, HOST_ESR_EL2);
@@ -738,11 +738,22 @@ vmm_hyp_handle_guest_exit(struct hypctx *hypctx, uint64_t *ret)
 				     READ_SPECIALREG(hpfar_el2));
 	} else {
 		/*
+		 * Translate the faulting address through the guest's stage 1
+		 * tables.  The walk reads them through the guest's stage 2
+		 * tables, but the exit path has already switched VTTBR_EL2
+		 * back to the host's value, so load the guest's around it.
+		 *
 		 * TODO: There is a risk the at instruction could cause an
 		 * exception here. We should handle it & return a failure.
 		 */
 		host_far_el2 = hypctx_read_sys_reg(hypctx, HOST_FAR_EL2);
+		vttbr = READ_SPECIALREG(vttbr_el2);
+		WRITE_SPECIALREG(vttbr_el2,
+		    hypctx_read_sys_reg(hypctx, HOST_VTTBR_EL2));
+		isb();
 		s1e1r = arm64_address_translate_s1e1r(host_far_el2);
+		WRITE_SPECIALREG(vttbr_el2, vttbr);
+		isb();
 		if (PAR_SUCCESS(s1e1r)) {
 			hpfar_el2 = (s1e1r & PAR_PA_MASK) >> PAR_PA_SHIFT;
 			hpfar_el2 <<= HPFAR_EL2_FIPA_SHIFT;
