@@ -19,5 +19,8 @@ device		mt7986_msdc
 
 options 	FDT
 
+# Ethernet
+device		mtketh
+
 # DTBs
 makeoptions	MODULES_EXTRA+="dtb/mediatek"
