@@ -859,6 +859,7 @@ arm64/mediatek/mt7986_wdt.c		optional mt7986_wdt fdt soc_mediatek_mt7986
 arm64/mediatek/mt7986_msdc.c		optional mt7986_msdc mmc fdt soc_mediatek_mt7986
 arm64/mediatek/if_mtketh.c		optional mtketh fdt soc_mediatek_mt7986 syscon
 dev/etherswitch/mt7531/mt7531.c		optional mt7531sw etherswitch fdt
+arm64/mediatek/mtk_tphy.c			optional fdt phy soc_mediatek
 
 # RockChip Clock support
 dev/clk/rockchip/rk_cru.c			optional fdt soc_rockchip
