@@ -503,6 +503,8 @@ union xhci_hub_desc {
 };
 
 typedef int (xhci_port_route_t)(device_t, uint32_t, uint32_t);
+typedef void (xhci_endp_quirk_t)(device_t, struct usb_device *,
+    struct xhci_endp_ctx *);
 
 enum xhci_quirks {
 	XHCI_QUIRK_DISABLE_PORT_PED			= 0x00000001,
@@ -519,6 +521,12 @@ struct xhci_softc {
 	struct usb_callout	sc_callout;
 
 	xhci_port_route_t	*sc_port_route;
+
+	/*
+	 * Optional: fills in controller specific fields of an input
+	 * endpoint context after the standard ones are set.
+	 */
+	xhci_endp_quirk_t	*sc_endp_quirk;
 
 	union xhci_hub_desc	sc_hub_desc;
 
