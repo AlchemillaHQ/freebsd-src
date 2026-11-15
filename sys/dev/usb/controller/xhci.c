@@ -2688,6 +2688,9 @@ xhci_configure_endpoint(struct usb_device *udev,
 
 	endp->dwEpCtx4 = htole32(temp);
 
+	if (sc->sc_endp_quirk != NULL)
+		sc->sc_endp_quirk(sc->sc_bus.parent, udev, endp);
+
 #ifdef USB_DEBUG
 	xhci_dump_endpoint(endp);
 #endif
