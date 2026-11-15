@@ -9,6 +9,9 @@ options 	SOC_MEDIATEK_MT7986
 # Serial (COM) ports
 device		uart_ns8250		# ns8250-type UART driver
 
+# Watchdog and peripheral resets
+device		mt7986_wdt
+
 options 	FDT
 
 # DTBs
