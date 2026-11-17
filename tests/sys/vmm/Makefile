@@ -23,6 +23,7 @@ ${PACKAGE}FILES+=	utils.subr
 .PATH:		${.CURDIR}/${MACHINE_CPUARCH}
 
 ATF_TESTS_C+=	harness_test
+ATF_TESTS_C+=	mem_access_test
 
 # Every program links the harness, whose objects bsd.progs.mk builds once.
 .for t in ${ATF_TESTS_C}
@@ -48,6 +49,7 @@ CFLAGS+=	-mno-red-zone
 
 CFLAGS+=	-I${.CURDIR} -I${.CURDIR}/${MACHINE_CPUARCH}
 LIBADD+=	vmmapi
+LIBADD.mem_access_test+=	pthread
 
 # Guest code runs from a copy of the test binary, where libc and with it the
 # stack protector's canary are not mapped.  Fortified string functions would
