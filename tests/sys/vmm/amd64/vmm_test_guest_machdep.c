@@ -50,6 +50,8 @@ vmm_guest_trap(struct trapframe *tf)
 
 	if (tf->tf_trapno == IDT_PF)
 		tf->tf_addr = rcr2();
+	if (vmm_guest_dispatch(tf, tf->tf_trapno))
+		return;
 	_GUEST_UCALL(.cmd = UCALL_EXCEPTION, .args = { tf->tf_trapno,
 	    tf->tf_err, tf->tf_rip, tf->tf_addr });
 	vmm_guest_halt();

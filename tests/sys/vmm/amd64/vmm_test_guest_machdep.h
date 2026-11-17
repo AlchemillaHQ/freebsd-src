@@ -17,11 +17,14 @@
 #include <machine/specialreg.h>
 
 /*
- * Exceptions and interrupts.  Every IDT vector has an entry point.  An
- * exception or interrupt fails the test case with its vector, error code and
- * %rip, and for a page fault the faulting address, which the frame holds in
- * tf_addr.
+ * Exceptions and interrupts.  Every IDT vector has an entry point, and
+ * captured exceptions are numbered by IDT vector (IDT_UD, IDT_GP, IDT_PF, ...
+ * in <machine/segments.h>).  An exception or interrupt that guest code does
+ * not capture fails the test case with its vector, error code and %rip, and
+ * for a page fault the faulting address, which the frame holds in tf_addr.
  */
+#define	VMM_GUEST_NVECTORS	NIDT
+
 void	vmm_guest_trap(struct trapframe *);	/* called by the IDT stubs */
 
 #endif /* !_VMM_TEST_GUEST_MACHDEP_H_ */

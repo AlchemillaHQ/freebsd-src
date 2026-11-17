@@ -47,7 +47,14 @@ _Static_assert(sizeof(struct trapframe) == 288,
 void
 vmm_guest_trap(struct trapframe *tf, uint64_t index)
 {
+	int vector;
 
+	/* Synchronous, from the current EL with SPx. */
+	if (index == 4) {
+		vector = ESR_ELx_EXCEPTION(tf->tf_esr);
+		if (vmm_guest_dispatch(tf, vector))
+			return;
+	}
 	_GUEST_UCALL(.cmd = UCALL_EXCEPTION, .args = { index, tf->tf_esr,
 	    tf->tf_elr, tf->tf_far });
 	vmm_guest_halt();

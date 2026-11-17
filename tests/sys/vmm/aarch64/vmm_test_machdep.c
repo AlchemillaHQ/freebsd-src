@@ -370,6 +370,17 @@ vmm_test_md_describe_exception(const struct vmm_ucall *uc, char *buf,
 		    vector_origins[vector / 4]);
 }
 
+void
+vmm_test_md_vector_name(int vector, char *buf, size_t len)
+{
+
+	if (vector >= 0 && vector < (int)nitems(exception_names) &&
+	    exception_names[vector] != NULL)
+		(void)snprintf(buf, len, "%s", exception_names[vector]);
+	else
+		(void)snprintf(buf, len, "EC %#x", vector);
+}
+
 const char *
 vmm_test_md_exitcode_name(int exitcode)
 {

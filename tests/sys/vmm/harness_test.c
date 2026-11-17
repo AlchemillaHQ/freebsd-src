@@ -23,8 +23,12 @@
 
 #if defined(__amd64__)
 #define	UNDEF_INSN	"ud2"
+#define	UNDEF_VECTOR	IDT_UD
+#define	FAULT_VECTOR	IDT_PF
 #elif defined(__aarch64__)
 #define	UNDEF_INSN	"udf #0"
+#define	UNDEF_VECTOR	EXCP_UNKNOWN
+#define	FAULT_VECTOR	EXCP_DATA_ABORT
 #endif
 
 static uint64_t guest_value;
@@ -195,6 +199,57 @@ ATF_TC_BODY(exception_undefined, tc)
 #endif
 }
 
+static void
+guest_capture_undef(void)
+{
+
+	vmm_guest_capture_exception(UNDEF_VECTOR);
+	__asm __volatile(UNDEF_INSN);
+}
+
+static void
+guest_capture_nothing(void)
+{
+
+	vmm_guest_capture_exception(UNDEF_VECTOR);
+}
+
+static void
+host_expect_fault(struct vmm_test_vcpu *vcpu)
+{
+
+	(void)vmm_test_run_expect_exception(vcpu, FAULT_VECTOR);
+}
+
+static void
+host_expect_undef(struct vmm_test_vcpu *vcpu)
+{
+
+	(void)vmm_test_run_expect_exception(vcpu, UNDEF_VECTOR);
+}
+
+/* Capturing another exception, or none, fails the test case. */
+ATF_TC_WITHOUT_HEAD(capture_unexpected);
+ATF_TC_BODY(capture_unexpected, tc)
+{
+
+#if defined(__amd64__)
+	harness_expect_failure(guest_capture_undef, host_expect_fault,
+	    (const char *const []){
+	    "vCPU 0: expected captured #PF, captured #UD", NULL });
+	harness_expect_failure(guest_capture_nothing, host_expect_undef,
+	    (const char *const []){
+	    "vCPU 0: expected captured #UD, got DONE ucall from ", NULL });
+#elif defined(__aarch64__)
+	harness_expect_failure(guest_capture_undef, host_expect_fault,
+	    (const char *const []){ "vCPU 0: expected captured data abort, "
+	    "captured undefined instruction", NULL });
+	harness_expect_failure(guest_capture_nothing, host_expect_undef,
+	    (const char *const []){ "vCPU 0: expected captured undefined "
+	    "instruction, got DONE ucall from ", NULL });
+#endif
+}
+
 static uint64_t shared_value;
 static uint8_t shared_pages[2 * PAGE_SIZE] __aligned(PAGE_SIZE);
 
@@ -272,6 +327,7 @@ ATF_TP_ADD_TCS(tp)
 	ATF_TP_ADD_TC(tp, expect_exit_ucall);
 	ATF_TP_ADD_TC(tp, exception_unhandled);
 	ATF_TP_ADD_TC(tp, exception_undefined);
+	ATF_TP_ADD_TC(tp, capture_unexpected);
 	ATF_TP_ADD_TC(tp, guest_var);
 	ATF_TP_ADD_TC(tp, map_twice);
 	return (atf_no_error());

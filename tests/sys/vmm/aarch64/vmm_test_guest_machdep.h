@@ -13,9 +13,13 @@
 /*
  * Exceptions.  The VBAR_EL1 vectors save a struct trapframe.  Guest code runs
  * at EL1 on SP_EL1, so its exceptions arrive at the "current EL with SPx"
- * vectors.  An exception fails the test case with its vector, ESR_EL1,
- * ELR_EL1 and, where relevant, FAR_EL1.
+ * vectors.  Captured synchronous exceptions are numbered by exception class
+ * (ESR_EL1.EC, EXCP_* in <machine/armreg.h>).  An exception that guest code
+ * does not capture, and any IRQ, FIQ or SError, fails the test case with its
+ * vector, ESR_EL1, ELR_EL1 and, where relevant, FAR_EL1.
  */
+#define	VMM_GUEST_NVECTORS	64
+
 void	vmm_guest_trap(struct trapframe *, uint64_t);	/* called by vectors */
 
 #endif /* !_VMM_TEST_GUEST_MACHDEP_H_ */
